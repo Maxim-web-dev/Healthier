@@ -1,7 +1,5 @@
 import axios from 'axios'
 
-// УБРАТЬ АВТОРИЗАЦИЯ ТОКЕН
-
 export const getAccessToken = async () => {
 	let token = ''
 
@@ -12,9 +10,9 @@ export const getAccessToken = async () => {
 		headers: {
 			'Content-Type': 'application/x-www-form-urlencoded',
 			Accept: 'application/json',
-			RqUID: 'feb2eedd-eb5c-4d62-9637-250f973d4176',
+			RqUID: 'd5c6dc02-d79c-4b61-a748-455fba1872aa',
 			Authorization:
-				'Basic NjM1ZDQ4MGUtZDMwYS00Mzc2LThjNzYtOTQyZTkzZDgyYmYxOjMyNGZmMTA0LTc2ZTMtNGY3Zi05YmM4LTg5ZGQxNWRmNTgxNA==',
+				`Basic ${process?.env?.AUTH_TOKEN_GIGACHAT}`,
 		},
 		data: 'scope=GIGACHAT_API_PERS',
 	}

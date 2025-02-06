@@ -1,6 +1,22 @@
-import axios from 'axios'
-import fs from 'fs'
+import TelegramBot from 'node-telegram-bot-api'
+import cors from 'cors'
+import express from 'express'
 import path from 'path'
+import fs from 'fs'
+import { fileURLToPath } from 'url'
+import { dirname, join } from 'path'
+import axios from 'axios'
+
+import { getAccessToken } from './requests/getAccessToken.js'
+import { textRequest } from './requests/textRequest.js'
+import { checkCompound } from './features/checkCompound.js'
+import { getTextFromOCR } from './features/getTextFromOCR.js'
+import dotenv from 'dotenv'
+
+dotenv.config()
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 const pem = fs
 	.readFileSync(path.resolve('./certs/russian_trusted_root_ca.cer'))
@@ -8,60 +24,97 @@ const pem = fs
 process.env.NODE_EXTRA_CA_CERTS = pem
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
 
-const getAccessToken = () => {
-	const config = {
-		method: 'post',
-		maxBodyLength: Infinity,
-		url: 'https://ngw.devices.sberbank.ru:9443/api/v2/oauth',
-		headers: {
-			'Content-Type': 'application/x-www-form-urlencoded',
-			Accept: 'application/json',
-			RqUID: 'feb2eedd-eb5c-4d62-9637-250f973d4176',
-			Authorization:
-				'Basic NjM1ZDQ4MGUtZDMwYS00Mzc2LThjNzYtOTQyZTkzZDgyYmYxOjMyNGZmMTA0LTc2ZTMtNGY3Zi05YmM4LTg5ZGQxNWRmNTgxNA==',
-		},
-		data: 'scope=GIGACHAT_API_PERS',
+const bot = new TelegramBot(process?.env?.BOT_TOKEN, { polling: true });
+
+const app = express()
+app.use(cors())
+app.use(express.json())
+
+app.listen(3000, () => {
+	console.log(`Server running on port 3000`)
+})
+
+bot.on('message', async msg => {
+	const chatId = msg.chat.id
+	const text = msg.text
+	try {
+		if (text === '/start') {
+			await bot.sendMessage(
+				chatId,
+				'Healthier - бот, который поможет вам с выбором продуктов. Отправь боту состав или его фото. Бот пришлет ответ, стоит ли употреблять данный продукт'
+			)
+		} else if (text === '/info') {
+			await bot.sendMessage(
+				chatId,
+				`🤨Хочешь узнать, вреден ли продукт? - Отправь фото его состава.
+				
+🧐Хочешь узнать про конктреную добавку? - Просто отправь свой вопрос.
+
+😎Хочешь более 5 вопросов в день и расширенные ответы? - /premium`
+			)
+		} else if (text === '/premium') {
+			await bot.sendMessage(chatId, ``)
+		} else if (text === '/home') {
+			await bot.sendMessage(
+				chatId,
+				`Хотите добавить Healthier на рабочий стол? 
+
+1. Нажмите кнопку ниже
+2. В открывшемся окне нажмите на 3 точки в правом верхнем углу
+3. Нажмите 'Добавить на экран домой'`,
+				{
+					reply_markup: {
+						keyboard: [
+							[
+								{
+									text: 'Добавить домой',
+									web_app: { url: 'https://www.deepseek.com' },
+								},
+							],
+						],
+						resize_keyboard: true,
+					},
+				}
+			)
+		}
+	} catch (error) {
+		console.log(error)
 	}
+})
 
-	axios(config)
-		.then(res => console.log(res.data))
-		.catch(e => console.log(e))
-}
+bot.on('photo', async msg => {
+	const chatId = msg.chat.id
+	const photo = msg.photo
+	const photoId = photo[photo.length - 1].file_id
+	try {
+		// Сохранение файла
+		const photoUrl = await bot.getFileLink(photoId)
+		const response = await axios.get(photoUrl, { responseType: 'arraybuffer' })
+		const fileName =
+			Math.random().toString(36).substr(2, 9) + Date.now().toString(36) + '.jpg'
+		const savePath = join(__dirname, 'downloads', fileName)
+		fs.writeFileSync(savePath, response.data)
 
-const request = () => {
-	const data = JSON.stringify({
-		"model": "GigaChat",
-		"messages": [
-			{
-				"role": "system",
-				"content": "Ты — эксперт в области питания и диетологии. Твоя задача — анализировать фотографии или описания продуктов."
-			},
-			{
-				"role": "user",
-				"content": "Пожалуйста, проанализируй следующий состав продукта на наличие вредных ингредиентов. Сообщи, есть ли в нем что-то опасное для здоровья. Ко всем ингредиентам придерайся сильно! Ответ дай краткий. В ответе сначала укажи название данного продукта. В самом конце напиши вывод, стоит ли употреблять данный продукт с добавлением смайлика 💚, если продукт хороший или смайлика 💔, если продукт плохой"
+		// Распознавание вредных веществ
+		const text = await getTextFromOCR(fileName)
+		const result = checkCompound(text)
+
+		// Получение резюмированного ответа от GigaChat
+		// const accessToken = await getAccessToken()
+		// const finalAnswer = await textRequest(result, accessToken)
+		// const photo = await uploadFile(accessToken)
+		// const answer = await photoRequest(photo, accessToken)
+
+		// console.log(answer);
+
+		await bot.sendMessage(chatId, result, {
+			reply_markup: {
+				keyboard: []
+				// КАК УБРАТЬ КНОПКУ, ЕСЛИ КОМАНДА НЕ /ХОУМ
 			}
-		],
-		"stream": false,
-		"update_interval": 0
-	});
-
-	const config = {
-		method: 'post',
-		maxBodyLength: Infinity,
-		url: 'https://gigachat.devices.sberbank.ru/api/v1/chat/completions',
-		headers: {
-			'Content-Type': 'application/json',
-			'Accept': 'application/json',
-			'Authorization': `Bearer eyJjdHkiOiJqd3QiLCJlbmMiOiJBMjU2Q0JDLUhTNTEyIiwiYWxnIjoiUlNBLU9BRVAtMjU2In0.N1fqHYXrBlYi-Z9SeAHonPpah3vWGuizQo6JBC-xfOI6nRv79FCVgdHjyCQ58-DMmsCQ1QgE-_GfbcRDfCy96KDV3vHxtR4IO439Mhs1L7DqhvhKG3ETrAKcyTywWcdVw8EDcW5gZqCLTW57Q4Yr3AGEKm-rGs0shs9cGZwZ6e5gJWM6b3vJ8XR35bI552IwW80YWvPqReZ_AQ7ToRRseAGWRuw7uEoL7ncaZQLzW59qPU23ohlsdyveh3XSVFpiMpGmU-m5iBAebJmOYbNCwXKvTcyHNm25be4f_Ma1C223FCPD6bZupNRiXTbat2Zj_jWvCfZJ2F-Ad_ap_vwJDw.5OIMciA0BLaJ7hffYnf3oA.s7UwvnnIPN6z_Vc5csSwOyrFdvKDI58eevvjmFQHja5upAnnt8GoFdVhUh2BUANo86GLl-KsV6Le47w9uHHARX19gyeyIYQl20Hazig9NGOcZPuCLOcb_6oDUyv2AsjctJHpmb8mZlHEMnZPrX-ul84L-6R29_DvVAdvW5uw9B9-zb_EBwL4tfV2-37Tq_toE006tdHntBd4_S2t7C8_9iYod_8Y2X0dSgfZ1Xit3Ki7OARBRIKyrVj7sjjlXOLuUYtxX9j4G_BcLsyyArgpLelMCnPOKaW6SzTNKgpH47UtqbddydIhQxFxt_DstEqBgzOHvOwZwibAwJuIIu1YAv8zxiLJSW_w8eajEd_ktQSSHvsvcQhe9pYHyxqCVmtnkzgbAawBzpKyZGcCuNwwzZ91oFQiyu_HlkYOYGjUhcjL6jG1rLznyV2S69EYDc9uglh5yPuOw5J9rjuTrmmptXTQAniZKvPQAWaAzt1QTSUzYQmbII0VIR4C63O5JBOlq3sbvOSXX8WGqzITbbJ2q-LQm0oZnQT4bFIYJAHLK2HHPPAksaeA3xsfIjajKJicOauKvwO0ezBS78qTy6nzLH9gKPxhPMyAKYPMLhlqZSHPjUEECvAe1j63l31cNJtgyuPpR8rQWTKGQjzQ48NlEhL7ahcqhxynUAP5Si2YXTBfVeAFaD8kboXnmZ_gIq07VuX6zkzsxHggDHevEyggrZXsDQACUfPofE4IyeCcJY8.dX_JHEehKmNLPUw3FkBiJpY0QBCXOBw_5OsFTpNi4hQ`,
-		},
-		data
+		})
+	} catch (error) {
+		console.error('Ошибка при получении файла:', error)
+		await bot.sendMessage(chatId, 'Не удалось получить фото.')
 	}
-
-	axios(config)
-		.then(res => console.log(JSON.stringify(res.data)))
-		.catch(e => console.log(e))
-}
-
-// getAccessToken()
-// request()
-
+})
